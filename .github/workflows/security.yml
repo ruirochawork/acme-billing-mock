@@ -1,0 +1,91 @@
+# Runs the real scanners against a running instance and records what they find. Report-only: it
+# never fails the job on findings, because on `main` the app is deliberately vulnerable and a
+# permanently-red workflow trains people to ignore it. The genuine red->green signal lives in
+# retest.yml (the PR gate). Nuclei findings go to the Security tab as SARIF; ZAP produces a report
+# artifact; the exploit script records the EXPLOITABLE/FIXED verdict as an artifact.
+#
+# The target runs with node on the runner host (127.0.0.1:3000) and the scanners run as
+# containers with --network host, so they can actually reach it. (The wrapped ZAP/scan Actions
+# run ZAP in their own container where 127.0.0.1 is the container, not the app — hence host
+# networking here instead.)
+name: security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write # upload SARIF to code scanning (free on public repos)
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+
+      - name: Start the target
+        run: |
+          HOST=127.0.0.1 PORT=3000 node src/server.js &
+          echo "PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:3000/healthz && break; sleep 1; done
+
+      - name: Nuclei (custom template -> SARIF)
+        run: |
+          docker run --rm --network host -v "$PWD:/work" \
+            projectdiscovery/nuclei:latest \
+            -u http://127.0.0.1:3000 -t /work/security/nuclei \
+            -severity low,medium,high,critical -duc -nc \
+            -sarif-export /work/nuclei.sarif || true
+
+      - name: Upload Nuclei SARIF
+        if: hashFiles('nuclei.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: nuclei.sarif
+          category: nuclei
+
+      - name: ZAP baseline (passive) -> report artifact
+        run: |
+          docker run --rm --network host -v "$PWD:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://127.0.0.1:3000 -c /zap/wrk/.zap/rules.tsv \
+            -r zap-baseline.html -J zap-baseline.json || true
+
+      - name: ZAP full scan (active) -> report artifact
+        run: |
+          docker run --rm --network host -v "$PWD:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-full-scan.py -t http://127.0.0.1:3000 -c /zap/wrk/.zap/rules.tsv \
+            -r zap-full.html -J zap-full.json || true
+
+      - name: Prove the access-control finding (report-only on main)
+        run: node security/exploit/access-control.mjs --url http://127.0.0.1:3000 | tee exploit-result.json
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-reports
+          path: |
+            zap-baseline.html
+            zap-baseline.json
+            zap-full.html
+            zap-full.json
+            nuclei.sarif
+            exploit-result.json
+          if-no-files-found: ignore
+
+      - name: Stop the target
+        if: always()
+        run: kill "${PID#PID=}" 2>/dev/null || true

@@ -1,0 +1,8 @@
+node_modules
+.git
+tests
+security
+.github
+.zap
+docs
+*.md

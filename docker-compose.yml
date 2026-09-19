@@ -1,0 +1,13 @@
+# Brings the target up for a scan and back down again. Used by the security workflow and handy
+# locally: `docker compose up --build -d` then run the scanners against http://127.0.0.1:3000.
+services:
+  target:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3000'

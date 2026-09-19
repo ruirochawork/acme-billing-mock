@@ -1,0 +1,19 @@
+{
+  "name": "acme-billing-mock",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Deliberately vulnerable mock billing API used only to demonstrate a security-testing tool. No real users, no real data.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "exploit": "node security/exploit/access-control.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

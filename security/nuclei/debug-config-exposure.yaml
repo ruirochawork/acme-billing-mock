@@ -1,0 +1,34 @@
+id: acme-debug-config-exposure
+
+info:
+  name: Exposed debug configuration endpoint
+  author: acme-billing-mock
+  severity: high
+  description: >
+    Detects the unauthenticated /debug/config endpoint that leaks account identifiers, an
+    internal token, and each account's latest invoice id. This is the chain enabler for the
+    cross-tenant invoice read demonstrated by security/exploit/access-control.mjs.
+  tags: exposure,config,idor,mock
+
+http:
+  - method: GET
+    path:
+      - '{{BaseURL}}/debug/config'
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - '"internalToken"'
+          - '"latestInvoiceId"'
+        condition: and
+    extractors:
+      - type: regex
+        part: body
+        name: leaked_invoice_id
+        group: 1
+        regex:
+          - '"latestInvoiceId":"(inv_[a-z0-9_]+)"'

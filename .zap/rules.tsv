@@ -1,0 +1,7 @@
+# ZAP baseline/full-scan rule tuning. Columns: rule id <tab> action (IGNORE|WARN|FAIL) <tab> note.
+# Default action for unlisted rules is WARN. Kept minimal on purpose so the seeded flaws surface:
+#   10038 Content Security Policy (CSP) header not set      -> the missing-CSP seeded flaw
+#   10054 Cookie without SameSite attribute                 -> the cookie seeded flaw
+#   10098 Cross-Domain Misconfiguration (permissive CORS)   -> the reflected-CORS seeded flaw
+# Example of silencing a known-irrelevant alert for this mock:
+10096	IGNORE	Timestamp disclosure is noise on a fake service
