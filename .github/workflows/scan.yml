@@ -1,0 +1,114 @@
+# Steps 1-2 of the loop: test a running server and detect the weakness.
+#
+# Scans whichever environment you point it at (default: the QA_URL variable). If QA_URL is not set
+# yet it starts a local instance on the runner instead, so the workflow is useful before any
+# hosting exists. Report-only: it never fails on findings — the gate is retest-pr, not this. When
+# the exploit reports EXPLOITABLE it opens a tracking issue carrying the evidence.
+name: scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'URL to scan (blank = QA_URL variable, or a local instance)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+  security-events: write # SARIF to code scanning (free on public repos)
+  issues: write # open a tracking issue when EXPLOITABLE
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QA_URL: ${{ vars.QA_URL }}
+      INPUT_TARGET: ${{ github.event.inputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+
+      # Decide the target: explicit input > QA_URL variable > a local instance on the runner.
+      - name: Resolve target
+        id: target
+        run: |
+          url="${INPUT_TARGET:-$QA_URL}"
+          if [ -z "$url" ]; then
+            HOST=127.0.0.1 PORT=3000 node src/server.js &
+            echo "PID=$!" >> "$GITHUB_ENV"
+            url="http://127.0.0.1:3000"
+            for i in $(seq 1 60); do curl -sf "$url/healthz" && break; sleep 1; done
+            echo "local=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "scanning $url"
+
+      - name: Nuclei (custom template -> SARIF)
+        run: |
+          docker run --rm --network host -v "$PWD:/work" \
+            projectdiscovery/nuclei:latest \
+            -u "${{ steps.target.outputs.url }}" -t /work/security/nuclei \
+            -severity low,medium,high,critical -duc -nc \
+            -sarif-export /work/nuclei.sarif || true
+
+      - name: Upload Nuclei SARIF
+        if: hashFiles('nuclei.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: nuclei.sarif
+          category: nuclei
+
+      - name: ZAP baseline -> report artifact
+        run: |
+          docker run --rm --network host -v "$PWD:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "${{ steps.target.outputs.url }}" -c /zap/wrk/.zap/rules.tsv \
+            -r zap-baseline.html -J zap-baseline.json || true
+
+      - name: Exploit (detect the finding, report-only)
+        id: exploit
+        run: |
+          node security/exploit/access-control.mjs --url "${{ steps.target.outputs.url }}" | tee exploit-result.json
+          verdict="$(sed -n 's/.*"verdict": "\([A-Z]*\)".*/\1/p' exploit-result.json | head -1)"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+      - name: Open a tracking issue when exploitable
+        if: steps.exploit.outputs.verdict == 'EXPLOITABLE'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Detected: cross-tenant invoice read on ${{ steps.target.outputs.url }}"
+          # Avoid duplicates: reuse an open issue with the same title if one exists.
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' 2>/dev/null || true)"
+          body="$(printf 'The scheduled scan proved the finding on \`%s\`.\n\n```json\n%s\n```\n\nRun the propose-fix workflow with finding \`cross-tenant-invoice-read\` to start remediation.' "${{ steps.target.outputs.url }}" "$(cat exploit-result.json)")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label security --body "$body" || \
+            gh issue create --title "$title" --body "$body"
+          fi
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-reports
+          path: |
+            zap-baseline.html
+            zap-baseline.json
+            nuclei.sarif
+            exploit-result.json
+          if-no-files-found: ignore
+
+      - name: Stop local instance
+        if: always() && steps.target.outputs.local == 'true'
+        run: kill "${PID#PID=}" 2>/dev/null || true

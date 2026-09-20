@@ -23,7 +23,9 @@ read `/debug/config` to learn Globex's latest invoice id, then read it with Alic
 
 ## The demonstration PR
 
-Scope the first PR to **flaw 1 only** — the hero. The fix adds the ownership check to
-`src/app.js`. The retest workflow then shows the attack returning 403 while the control request
-(Alice reading her own invoice) still returns 200, proving the endpoint was narrowed rather than
-broken. Flaws 2–4 are left for subsequent PRs so each stays a clean, single-finding change.
+Scope the first PR to **flaw 1 only** — the hero. The fix is the stored patch
+`security/fixes/cross-tenant-invoice-read.patch` (the ownership check on `src/app.js`), applied by
+the `propose-fix` workflow after approval. `retest-pr` then shows the attack returning 403 while
+the control request (Alice reading her own invoice) still returns 200, proving the endpoint was
+narrowed rather than broken. Flaws 2–4 are left for subsequent findings so each stays a clean,
+single-finding change.

@@ -1,0 +1,68 @@
+# Step 7: on merge to main, build the image once, publish it to GHCR tagged by commit, deploy it
+# to QA, and verify QA is up and running exactly that commit. The published digest is the artifact
+# everything downstream promotes — production never rebuilds from source.
+#
+# Deploy + verify run only when the QA_URL variable is set, so a fresh repo still builds and
+# publishes green before any hosting exists. Wire deploy/deploy.sh and set QA_URL to activate them.
+name: deliver
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write # push to GHCR
+
+jobs:
+  build-publish-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QA_URL: ${{ vars.QA_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+
+      - name: Compute image name (GHCR requires lowercase)
+        id: img
+        run: echo "image=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/acme-billing-mock" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # QEMU + buildx let the amd64 runner cross-build an arm64 image for the Oracle A1 (Arm) box.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push multi-arch (amd64 + arm64), tagged by sha and latest
+        id: build
+        run: |
+          IMAGE="${{ steps.img.outputs.image }}"
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" --push .
+          # The manifest-list digest: pulling image@<this> on any host resolves the right arch.
+          listdigest="$(docker buildx imagetools inspect "$IMAGE:${GITHUB_SHA}" --format '{{.Manifest.Digest}}')"
+          echo "digest=$IMAGE@$listdigest" >> "$GITHUB_OUTPUT"
+          echo "deployable digest: $IMAGE@$listdigest"
+
+      - name: Deploy to QA
+        if: env.QA_URL != ''
+        run: |
+          chmod +x deploy/*.sh
+          ./deploy/deploy.sh qa "${{ steps.build.outputs.digest }}" "${GITHUB_SHA}"
+
+      # Report-only: main may be the vulnerable baseline or a merged fix. It hard-asserts QA is up
+      # and running this exact commit; the fixed/vulnerable state is recorded, not asserted here.
+      # The assertion that the finding is FIXED on QA happens in promote.yml, as its gate.
+      - name: Verify QA (health + sha, report finding state)
+        if: env.QA_URL != ''
+        run: |
+          chmod +x deploy/*.sh
+          ./deploy/verify.sh "${QA_URL}" "${GITHUB_SHA}" report

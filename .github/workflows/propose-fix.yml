@@ -1,0 +1,74 @@
+# Steps 3-5: locate the code behind a finding, get the fix approved, and open the pull request.
+#
+# The `locate` job resolves the finding to a file:line and prints the stored patch into the job
+# summary. The `open-pr` job runs only after a human approves the `fix-approval` environment, then
+# applies the patch on a branch, pushes it, and opens the PR. retest-pr then gates the merge.
+#
+# NOTE: to make retest-pr run automatically on the PR this opens, set a repository secret PR_TOKEN
+# to a fine-grained PAT with contents+pull-requests write. PRs opened with the default GITHUB_TOKEN
+# do NOT trigger other workflows (GitHub's recursion guard), so retest would not start on its own.
+name: propose-fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      finding:
+        description: 'Finding id from security/findings.json'
+        required: true
+        default: 'cross-tenant-invoice-read'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  locate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Resolves the finding to a real file:line and renders the patch into the run summary for
+      # the approver to read. Automated: locating the code. Not automated: the fix itself.
+      - name: Locate the code and present the fix
+        run: node security/locate-fix.mjs --finding "${{ github.event.inputs.finding }}"
+
+  open-pr:
+    needs: locate
+    runs-on: ubuntu-latest
+    environment: fix-approval # add a required reviewer to this environment = the approval gate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PR_TOKEN || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Read finding metadata
+        id: meta
+        run: |
+          finding='${{ github.event.inputs.finding }}'
+          patch="$(node -e "console.log(JSON.parse(require('fs').readFileSync('security/findings.json'))['$finding'].patch)")"
+          title="$(node -e "console.log(JSON.parse(require('fs').readFileSync('security/findings.json'))['$finding'].title)")"
+          echo "patch=$patch" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "branch=fix/$finding" >> "$GITHUB_OUTPUT"
+
+      - name: Apply the stored patch on a branch and open the PR
+        env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN || github.token }}
+        run: |
+          git config user.name "security-bot"
+          git config user.email "security-bot@users.noreply.github.com"
+          git switch -c "${{ steps.meta.outputs.branch }}"
+          git apply --index "${{ steps.meta.outputs.patch }}"
+          git commit -m "Fix ${{ github.event.inputs.finding }}: ${{ steps.meta.outputs.title }}"
+          git push -u origin "${{ steps.meta.outputs.branch }}" --force-with-lease
+          body="$(printf 'Proposed remediation for \`%s\`.\n\n**Provenance:** stored patch (%s), applied by the propose-fix workflow after approval. Not authored by a model.\n\nretest-pr must observe the exploit fail (attack 403) while the control request still succeeds (200) before this can merge.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)' "${{ github.event.inputs.finding }}" "${{ steps.meta.outputs.patch }}")"
+          gh pr create --base main --head "${{ steps.meta.outputs.branch }}" \
+            --title "Fix: ${{ steps.meta.outputs.title }}" --body "$body"

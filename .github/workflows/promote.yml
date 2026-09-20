@@ -1,0 +1,81 @@
+# Steps 8-9: promote a QA-verified commit to production.
+#
+# Gate first: re-run the original finding against QA and require FIXED (your "rerun the tests on QA
+# for the initial issue" step). Only then, behind the `production` environment's required reviewer,
+# deploy the SAME image digest to production and verify prod is up, on that commit, and FIXED.
+# Production never rebuilds — it promotes the exact artifact QA proved.
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to promote (must be the one deployed to and verified on QA)'
+        required: true
+      finding:
+        description: 'Finding to re-verify as fixed'
+        required: true
+        default: 'cross-tenant-invoice-read'
+
+permissions:
+  contents: read
+  packages: read # pull the digest from GHCR
+
+jobs:
+  qa-gate:
+    runs-on: ubuntu-latest
+    env:
+      QA_URL: ${{ vars.QA_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Rerun the original issue on QA (must be FIXED)
+        run: |
+          if [ -z "$QA_URL" ]; then echo "::error::QA_URL not set — cannot gate on QA"; exit 1; fi
+          chmod +x deploy/*.sh
+          ./deploy/verify.sh "${QA_URL}" "${{ github.event.inputs.sha }}" fixed
+
+  promote-prod:
+    needs: qa-gate
+    runs-on: ubuntu-latest
+    environment: production # add a required reviewer here = the promotion approval
+    env:
+      PROD_URL: ${{ vars.PROD_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+
+      - name: Compute image name
+        id: img
+        run: echo "image=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/acme-billing-mock" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the exact digest for this sha
+        id: digest
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE="${{ steps.img.outputs.image }}"
+          # The manifest-list digest (not a per-arch one): the Arm host resolves its own layer.
+          listdigest="$(docker buildx imagetools inspect "$IMAGE:${{ github.event.inputs.sha }}" --format '{{.Manifest.Digest}}')"
+          echo "digest=$IMAGE@$listdigest" >> "$GITHUB_OUTPUT"
+          echo "promoting digest: $IMAGE@$listdigest"
+
+      - name: Deploy the same digest to production
+        run: |
+          chmod +x deploy/*.sh
+          ./deploy/deploy.sh prod "${{ steps.digest.outputs.digest }}" "${{ github.event.inputs.sha }}"
+
+      - name: Verify production (health + sha + finding FIXED)
+        run: |
+          if [ -z "$PROD_URL" ]; then echo "::error::PROD_URL not set"; exit 1; fi
+          chmod +x deploy/*.sh
+          ./deploy/verify.sh "${PROD_URL}" "${{ github.event.inputs.sha }}" fixed
