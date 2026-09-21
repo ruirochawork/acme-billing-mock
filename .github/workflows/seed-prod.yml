@@ -1,0 +1,30 @@
+# Utility: point the :prod tag at a specific commit's image, server-side (same digest, no rebuild).
+#
+# Use it once to start production on the vulnerable baseline, so a later `promote` visibly flips
+# prod from EXPLOITABLE to FIXED. Also the prod re-arm button: run it again with the vulnerable
+# baseline to reset prod for the next demo. Ungated on purpose — it is a setup/reset tool, not the
+# promotion path (that gate lives in promote.yml).
+name: seed-prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA whose image :prod should point at (default = the vulnerable baseline)'
+        required: true
+        default: '34fcf1ed8f9ec45e799ea5b9dcf4155ba7d23f2c'
+
+permissions:
+  contents: read
+  packages: write # move the :prod tag in GHCR
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point :prod at the chosen image
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/acme-billing-mock"
+          docker buildx imagetools create -t "$IMAGE:prod" "$IMAGE:${{ github.event.inputs.sha }}"
+          echo "::notice::$IMAGE:prod now points at ${{ github.event.inputs.sha }}"

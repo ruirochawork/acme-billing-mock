@@ -1,16 +1,19 @@
 # Steps 8-9: promote a QA-verified commit to production.
 #
-# Gate first: re-run the original finding against QA and require FIXED (your "rerun the tests on QA
-# for the initial issue" step). Only then, behind the `production` environment's required reviewer,
-# deploy the SAME image digest to production and verify prod is up, on that commit, and FIXED.
-# Production never rebuilds — it promotes the exact artifact QA proved.
+# Gate first: confirm QA is running this exact commit and the finding is FIXED there. Then, behind
+# the `production` environment's required reviewer, move the :prod tag to the QA-verified image
+# (server-side, same digest, never a rebuild) and verify prod picks it up and is FIXED.
+#
+# Deploy is pull-based, like QA: the prod box runs the :prod tag and a Watchtower watching :prod,
+# so moving the tag is the deploy. Prod does NOT follow :latest, so ordinary merges never reach it
+# — only a deliberate promote does.
 name: promote
 
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: 'Commit SHA to promote (must be the one deployed to and verified on QA)'
+        description: 'Commit SHA to promote (must be live and FIXED on QA)'
         required: true
       finding:
         description: 'Finding to re-verify as fixed'
@@ -19,7 +22,7 @@ on:
 
 permissions:
   contents: read
-  packages: read # pull the digest from GHCR
+  packages: write # move the :prod tag in GHCR
 
 jobs:
   qa-gate:
@@ -34,11 +37,16 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - name: Rerun the original issue on QA (must be FIXED)
+      - name: QA must be running this commit and be FIXED
         run: |
           if [ -z "$QA_URL" ]; then echo "::error::QA_URL not set — cannot gate on QA"; exit 1; fi
-          chmod +x deploy/*.sh
-          ./deploy/verify.sh "${QA_URL}" "${{ github.event.inputs.sha }}" fixed
+          for i in $(seq 1 12); do
+            cur="$(curl -fsS "$QA_URL/version" | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p' || true)"
+            [ "$cur" = "${{ github.event.inputs.sha }}" ] && break
+            echo "QA on ${cur:-unreachable}, waiting for ${{ github.event.inputs.sha }}..."; sleep 10
+          done
+          test "$cur" = "${{ github.event.inputs.sha }}" || { echo "::error::QA is not running ${{ github.event.inputs.sha }}"; exit 1; }
+          node security/exploit/access-control.mjs --url "$QA_URL" --expect fixed
 
   promote-prod:
     needs: qa-gate
@@ -59,23 +67,20 @@ jobs:
         id: img
         run: echo "image=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/acme-billing-mock" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve the exact digest for this sha
-        id: digest
+      - name: Move the :prod tag to the QA-verified image (same digest, no rebuild)
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           IMAGE="${{ steps.img.outputs.image }}"
-          # The manifest-list digest (not a per-arch one): the Arm host resolves its own layer.
-          listdigest="$(docker buildx imagetools inspect "$IMAGE:${{ github.event.inputs.sha }}" --format '{{.Manifest.Digest}}')"
-          echo "digest=$IMAGE@$listdigest" >> "$GITHUB_OUTPUT"
-          echo "promoting digest: $IMAGE@$listdigest"
+          docker buildx imagetools create -t "$IMAGE:prod" "$IMAGE:${{ github.event.inputs.sha }}"
+          echo "moved $IMAGE:prod -> $IMAGE:${{ github.event.inputs.sha }}"
 
-      - name: Deploy the same digest to production
-        run: |
-          chmod +x deploy/*.sh
-          ./deploy/deploy.sh prod "${{ steps.digest.outputs.digest }}" "${{ github.event.inputs.sha }}"
-
-      - name: Verify production (health + sha + finding FIXED)
+      - name: Wait for prod to pick up the promotion, then verify FIXED
         run: |
           if [ -z "$PROD_URL" ]; then echo "::error::PROD_URL not set"; exit 1; fi
-          chmod +x deploy/*.sh
-          ./deploy/verify.sh "${PROD_URL}" "${{ github.event.inputs.sha }}" fixed
+          for i in $(seq 1 30); do
+            cur="$(curl -fsS "$PROD_URL/version" | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p' || true)"
+            [ "$cur" = "${{ github.event.inputs.sha }}" ] && { echo "prod on ${{ github.event.inputs.sha }}"; break; }
+            echo "waiting for prod to report ${{ github.event.inputs.sha }} (currently ${cur:-unreachable})..."; sleep 10
+          done
+          test "$cur" = "${{ github.event.inputs.sha }}" || { echo "::error::prod did not pick up the promotion"; exit 1; }
+          node security/exploit/access-control.mjs --url "$PROD_URL" --expect fixed
