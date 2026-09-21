@@ -94,15 +94,15 @@ export function createApp() {
     res.json({ invoices: invoicesForAccount(user.accountId) });
   });
 
-  // Object-level authorization: the caller must be logged in AND the invoice must belong to
-  // their account. Ordering returns 403 (not 404) for an existing invoice owned by someone else,
-  // so the control request keeps working while the cross-tenant read is refused.
+  // SEEDED FLAW (Access control — the hero): this reads an invoice by id and checks only that
+  // the caller is logged in, never that the invoice belongs to their account. Any authenticated
+  // user can read any tenant's invoice (IDOR / broken object-level authorization). Fix: compare
+  // invoice.accountId with the caller's accountId and return 403 otherwise.
   app.get('/api/invoices/:id', (req, res) => {
     const user = currentUser(req);
     if (!user) return res.status(401).json({ error: 'not authenticated' });
     const invoice = invoices.find((candidate) => candidate.id === req.params.id);
     if (!invoice) return res.status(404).json({ error: 'not found' });
-    if (invoice.accountId !== user.accountId) return res.status(403).json({ error: 'forbidden' });
     res.json({ invoice });
   });
 
