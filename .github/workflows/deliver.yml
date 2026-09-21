@@ -1,9 +1,10 @@
-# Step 7: on merge to main, build the image once, publish it to GHCR tagged by commit, deploy it
-# to QA, and verify QA is up and running exactly that commit. The published digest is the artifact
-# everything downstream promotes — production never rebuilds from source.
+# Step 7: on merge to main, build the image once and publish it to GHCR tagged by commit and
+# :latest. The published digest is the artifact everything downstream promotes — production never
+# rebuilds from source.
 #
-# Deploy + verify run only when the QA_URL variable is set, so a fresh repo still builds and
-# publishes green before any hosting exists. Wire deploy/deploy.sh and set QA_URL to activate them.
+# Deploy is pull-based (Watchtower on the QA box follows :latest); this job just waits for QA to
+# report the new commit and records the finding state. That wait runs only when the QA_URL
+# variable is set, so a fresh repo still builds and publishes green before any hosting exists.
 name: deliver
 
 on:

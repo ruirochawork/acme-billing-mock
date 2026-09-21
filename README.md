@@ -9,6 +9,9 @@ It is the real target behind the scripted "verifies its own fixes" loop in the m
 scanner finds a weakness, an exploit proves it against the live service **with a control request**,
 a pull request fixes it, and the pipeline retests the deployed commit to prove the fix.
 
+> **Current live state, the two servers, and how to run the demo:**
+> [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ## Run locally
 
 ```sh
