@@ -5,9 +5,11 @@ against a real running service and a real CI pipeline. No real users, no real da
 production. Same idea as OWASP Juice Shop or DVWA. Read [SCOPE.md](SCOPE.md) before running it
 anywhere reachable.
 
-It is the real target behind the scripted "verifies its own fixes" loop in the main showcase: a
-scanner finds a weakness, an exploit proves it against the live service **with a control request**,
-a pull request fixes it, and the pipeline retests the deployed commit to prove the fix.
+It is the real target behind the scripted "verifies its own fixes" loop in
+[Pentest Mission Control](https://github.com/ruirochawork/mock-test-suite), the showcase this
+demonstrates for real: a scanner finds a weakness, an exploit proves it against the live service
+**with a control request**, a pull request fixes it, and the pipeline retests the deployed commit
+to prove the fix.
 
 > **Current live state, the two servers, and how to run the demo:**
 > [docs/OPERATIONS.md](docs/OPERATIONS.md).

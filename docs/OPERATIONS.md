@@ -1,7 +1,9 @@
 # Operations & current state
 
 The live, working state of this demo and how to run it. For what the app is and why it's
-deliberately vulnerable, see [README](../README.md) and [SCOPE](../SCOPE.md).
+deliberately vulnerable, see [README](../README.md) and [SCOPE](../SCOPE.md). This is the live
+counterpart to [Pentest Mission Control](https://github.com/ruirochawork/mock-test-suite), where
+the same loop is presented as a scripted showcase.
 
 _Last verified: 2026-09-21._
 
