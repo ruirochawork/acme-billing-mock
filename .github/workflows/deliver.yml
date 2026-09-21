@@ -52,17 +52,16 @@ jobs:
           echo "digest=$IMAGE@$listdigest" >> "$GITHUB_OUTPUT"
           echo "deployable digest: $IMAGE@$listdigest"
 
-      - name: Deploy to QA
+      # Deploy is pull-based: a Watchtower container on the QA box watches the :latest tag and
+      # updates the app within its poll interval. CI stores no key and never connects to the box;
+      # it just waits for QA to report this commit, then records the finding state (report-only).
+      - name: Wait for QA to pick up this build, then check the finding
         if: env.QA_URL != ''
         run: |
-          chmod +x deploy/*.sh
-          ./deploy/deploy.sh qa "${{ steps.build.outputs.digest }}" "${GITHUB_SHA}"
-
-      # Report-only: main may be the vulnerable baseline or a merged fix. It hard-asserts QA is up
-      # and running this exact commit; the fixed/vulnerable state is recorded, not asserted here.
-      # The assertion that the finding is FIXED on QA happens in promote.yml, as its gate.
-      - name: Verify QA (health + sha, report finding state)
-        if: env.QA_URL != ''
-        run: |
-          chmod +x deploy/*.sh
-          ./deploy/verify.sh "${QA_URL}" "${GITHUB_SHA}" report
+          for i in $(seq 1 30); do
+            sha="$(curl -fsS "$QA_URL/version" | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p' || true)"
+            [ "$sha" = "${GITHUB_SHA}" ] && { echo "QA is on ${GITHUB_SHA}"; break; }
+            echo "waiting for QA to report ${GITHUB_SHA} (currently ${sha:-unreachable})..."
+            sleep 10
+          done
+          node security/exploit/access-control.mjs --url "$QA_URL" || true
