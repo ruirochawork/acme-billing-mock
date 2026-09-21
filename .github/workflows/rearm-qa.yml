@@ -1,0 +1,48 @@
+# Re-arm QA for the next demo: put the seeded vulnerability back on `main`, keeping every pipeline
+# and doc improvement made since. It reverses the stored fix patch, commits, and pushes to main;
+# `deliver` then rebuilds and Watchtower rolls QA back to EXPLOITABLE.
+#
+# This is a deliberate reset, not a change to verify, so it bypasses the PR/retest gate and pushes
+# straight to main. It pushes with PR_TOKEN so `deliver` actually triggers (a push by the default
+# token would not). Prod is separate: re-arm it with seed-prod.
+name: rearm-qa
+
+on:
+  workflow_dispatch:
+    inputs:
+      finding:
+        description: 'Finding to re-introduce on main'
+        required: true
+        default: 'cross-tenant-invoice-read'
+
+permissions:
+  contents: read # the push uses PR_TOKEN, not the default token
+
+jobs:
+  rearm:
+    runs-on: ubuntu-latest
+    environment: fix-approval # reuse the human gate so a reset is never one accidental click
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PR_TOKEN }}
+
+      - name: Reverse the fix patch to restore the seeded vulnerability
+        run: |
+          finding='${{ github.event.inputs.finding }}'
+          patch="$(node -e "console.log(JSON.parse(require('fs').readFileSync('security/findings.json'))['$finding'].patch)")"
+          if git apply -R --check "$patch" 2>/dev/null; then
+            git config user.name "security-bot"
+            git config user.email "security-bot@users.noreply.github.com"
+            git apply -R "$patch"
+            git commit -am "Re-arm QA: restore seeded vulnerability ($finding) for the next demo"
+            git push origin HEAD:main
+            echo "::notice::main re-armed with $finding; deliver will roll QA back to EXPLOITABLE"
+          elif git apply --check "$patch" 2>/dev/null; then
+            echo "::notice::main is already vulnerable for $finding; nothing to do"
+          else
+            echo "::error::$(basename "$patch") no longer applies cleanly to main; app code has drifted. Re-arm by hand or update the stored patch."
+            exit 1
+          fi

@@ -26,7 +26,7 @@ region `eu-paris-1`, same VCN/subnet. Registry: `ghcr.io/ruirochawork/acme-billi
 Both currently run commit `ca1055d` and are **FIXED** (the cross-tenant read returns 403 while a
 tenant's own read still returns 200).
 
-## The pipeline (6 workflows)
+## The pipeline (7 workflows)
 
 | Workflow | Trigger | Role |
 | --- | --- | --- |
@@ -36,6 +36,7 @@ tenant's own read still returns 200).
 | `deliver` | push to `main` | Build once (amd64 + arm64), push `:latest` and `:<sha>` to GHCR. Waits for QA to report the new commit, records finding state. No key stored; QA updates itself. |
 | `promote` | manual (sha) | Confirm QA is on that commit and FIXED → pause on the `production` environment → move `:prod` to that image server-side (same digest, no rebuild) → wait for prod to report it → verify prod FIXED. |
 | `seed-prod` | manual (sha) | Point `:prod` at any commit's image. Used to start prod on the vulnerable baseline, and to re-arm prod. Ungated utility. |
+| `rearm-qa` | manual | Re-arm QA: reverse the stored fix patch on `main` (keeping later changes), push, and let `deliver` roll QA back to EXPLOITABLE. Gated by `fix-approval`. |
 
 ## Deploy model (pull-based, no SSH)
 
@@ -103,12 +104,15 @@ Load-bearing, easy to get wrong (all learned the hard way here):
 
 ## Re-arming for the next run
 
+- **QA / `main`:** Actions → `rearm-qa` → Run → approve `fix-approval`. It reverses the stored
+  fix patch on top of current `main` (restoring the vulnerability while keeping every later
+  pipeline/doc change), pushes to `main`, and `deliver` rolls QA back to EXPLOITABLE. Safe to
+  re-run: if `main` is already vulnerable it does nothing.
 - **Prod:** Actions → `seed-prod` → Run with sha `34fcf1ed8f9ec45e799ea5b9dcf4155ba7d23f2c` (the
   vulnerable baseline) → prod goes EXPLOITABLE again after Watchtower polls.
-- **QA / `main`:** not yet automated. `main` is currently the fixed version; the
-  `demo-vulnerable` tag points at the last vulnerable baseline (`fcf8aa6`), but resetting to it
-  would drop later pipeline/doc improvements. A browser-driven QA re-arm (re-apply the
-  vulnerability on top of current `main`) is the remaining piece to build.
+
+Full reset for a fresh demo: run `rearm-qa`, then `seed-prod` — both environments EXPLOITABLE,
+ready to run the loop again from the browser.
 
 ## Honesty notes (state these when presenting)
 
