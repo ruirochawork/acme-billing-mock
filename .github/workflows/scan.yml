@@ -81,6 +81,28 @@ jobs:
           verdict="$(sed -n 's/.*"verdict": "\([A-Z]*\)".*/\1/p' exploit-result.json | head -1)"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
+          # Render the verdict into the run summary so the result is readable in the browser
+          # without opening logs or a terminal.
+          sha="$(curl -fsS "${{ steps.target.outputs.url }}/version" | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p' || echo unknown)"
+          SHA="$sha" node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("exploit-result.json", "utf8"));
+            const banner = {
+              EXPLOITABLE: "### 🔴 EXPLOITABLE — the finding is live on this target",
+              FIXED: "### 🟢 FIXED — the attack is refused and the control still works",
+            }[r.verdict] || "### ⚠️ BROKEN — control or negative control misbehaved; verdict not trustworthy";
+            const md = [
+              "## Cross-tenant invoice read", "", banner, "",
+              "| Check | Meaning | Result |", "|---|---|---|",
+              `| Attack | Acme reads Globex'"'"'s invoice (${r.attack.victimInvoiceId}) | \`${r.attack.status}\`${r.attack.crossedTenant ? " — crossed tenant" : ""} |`,
+              `| Control | Acme reads its own invoice (must stay 200) | \`${r.control.status}\` |`,
+              `| Negative | No session at all (must stay 401) | \`${r.negative.status}\` |`,
+              "", `Target \`${r.target}\` running commit \`${process.env.SHA}\``, "",
+              "```json", JSON.stringify(r, null, 2), "```", "",
+            ].join("\n");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
+          '
+
       - name: Open a tracking issue when exploitable
         if: steps.exploit.outputs.verdict == 'EXPLOITABLE'
         env:

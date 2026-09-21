@@ -79,6 +79,39 @@ Repository **Settings → Secrets and variables → Actions**:
 **Environments** (Settings → Environments), each with a required reviewer:
 `fix-approval` (gates opening the PR) and `production` (gates the prod deploy).
 
+## The target box (pull-based deploy)
+
+Each environment runs the app plus [Watchtower](https://containrrr.dev/watchtower/), which polls
+GHCR and recreates the container when a new image appears. CI stores no deploy key and never
+connects to the box.
+
+```sh
+docker run -d --name qa --restart unless-stopped -p 3000:3000 \
+  ghcr.io/<owner>/acme-billing-mock:latest
+
+docker run -d --name watchtower --restart unless-stopped \
+  -e DOCKER_API_VERSION=1.44 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower --interval 30
+```
+
+Two things that are load-bearing and easy to get wrong:
+
+- **`DOCKER_API_VERSION` is required.** The `containrrr/watchtower` image ships a Docker API
+  client (1.25) older than modern daemons accept (≥1.40). Without this it errors on *every* poll
+  and silently never updates, while appearing to run fine. Check with `docker logs watchtower`.
+- **Do not pass `-e GIT_SHA` to the app container.** The image bakes in the commit it was built
+  from, and `/version` reports it. An explicit override survives Watchtower's recreation, so
+  `/version` would keep reporting a stale value and the commit checks in `deliver` and `promote`
+  would never match.
+
+On Oracle Cloud, opening a port needs **both** a VCN security-list ingress rule *and* the
+instance's own firewall (`sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 3000 -j
+ACCEPT && sudo netfilter-persistent save`). The security list alone is not enough.
+
+Production must **not** follow `:latest` like QA does, or it would auto-update on every merge and
+defeat the promotion gate. Pin prod to a specific tag and let `promote` move it.
+
 ## Re-arming the demo
 
 `main` and the `demo-vulnerable` tag are the vulnerable baseline. After a fix is merged, reset for
