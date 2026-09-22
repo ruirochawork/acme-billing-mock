@@ -68,6 +68,13 @@ export function createApp() {
   app.get('/version', (_req, res) => res.json({ service: 'acme-billing-mock', gitSha }));
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
+  // Ownership proof: echoes the secret set on this box via PMC_VERIFY_TOKEN. Whoever can configure
+  // the box can set it; proving knowledge of it to the control plane proves control of the target.
+  // Not a vulnerability — it exposes no secret unless one is deliberately configured here.
+  app.get('/.well-known/pmc-verify', (_req, res) =>
+    res.json({ service: 'acme-billing-mock', token: process.env.PMC_VERIFY_TOKEN || null }),
+  );
+
   // Mock sign-in: no password, because there is nothing real to protect. Pick a known user.
   app.post('/login', (req, res) => {
     const username = (req.body && req.body.username) || 'alice';
