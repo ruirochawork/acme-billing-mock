@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "note": "Access-control checks this application publishes for an assessment tool to run. The tool supplies the shape — an attack request that should be refused, a control of the same shape that should succeed, and the same request unauthenticated — and this file supplies what is specific to this application: how to sign in, how to discover another tenant's invoice id, and which routes to call. A check is only conclusive when the control succeeds and the unauthenticated request is refused; otherwise the result is BROKEN, which is not the same as safe. Companion to findings.json, which declares how each finding is fixed.",
+  "checks": [
+    {
+      "id": "cross-tenant-invoice-read",
+      "title": "Cross-tenant invoice read (IDOR)",
+      "severity": "high",
+      "cwe": "CWE-639",
+      "description": "A signed-in user can read another tenant's invoice by asking for its id directly. The handler looks the invoice up by id and returns it without checking that it belongs to the caller's account, so knowing an id is enough to read it.",
+      "remediation": "Check ownership before returning the record: the invoice's account must match the session, and a mismatch must be refused (403) rather than returned. Do not rely on ids being unguessable.",
+      "references": [
+        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+        "https://cwe.mitre.org/data/definitions/639.html"
+      ],
+      "tags": ["idor", "access-control", "cross-tenant"],
+      "setup": [
+        {
+          "name": "sign in as the attacker",
+          "method": "POST",
+          "path": "/login",
+          "json": { "username": "alice" },
+          "expectStatus": 200,
+          "capture": {
+            "session": { "cookie": true },
+            "accountId": { "json": "accountId" }
+          }
+        },
+        {
+          "name": "find another tenant's invoice id",
+          "method": "GET",
+          "path": "/debug/config",
+          "capture": {
+            "victimInvoiceId": {
+              "fromList": "accounts",
+              "where": { "field": "accountId", "notEqualTo": "{{accountId}}" },
+              "take": "latestInvoiceId"
+            }
+          }
+        },
+        {
+          "name": "find one of the attacker's own",
+          "method": "GET",
+          "path": "/api/invoices",
+          "session": "session",
+          "capture": { "ownInvoiceId": { "json": "invoices[0].id" } }
+        }
+      ],
+      "attack": {
+        "method": "GET",
+        "path": "/api/invoices/{{victimInvoiceId}}",
+        "session": "session"
+      },
+      "control": {
+        "method": "GET",
+        "path": "/api/invoices/{{ownInvoiceId}}",
+        "session": "session"
+      },
+      "negative": { "method": "GET", "path": "/api/invoices/{{victimInvoiceId}}" },
+      "crossed": { "json": "invoice.accountId", "notEqualTo": "{{accountId}}" },
+      "fixedStatuses": [401, 403, 404]
+    }
+  ]
+}
