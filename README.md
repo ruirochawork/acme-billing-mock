@@ -71,6 +71,13 @@ is a stored patch** in `security/fixes/`, keyed to the finding in `security/find
 output labels it as such, so an approver never mistakes it for a model-authored change. This is
 the demo being explicit about where automation ends today.
 
+This application declares three things about itself, so an assessment tool reads them rather than
+assuming: `security/checks.json` (the access-control checks it publishes for a tool to run),
+`security/findings.json` (how each finding is fixed), and `security/architecture.json` (its
+components and the routes each one serves, so findings are drawn where they actually sit). Each has
+to stay true of the code: a component that no longer exists, or a route that was never added, is a
+bug in the declaration.
+
 ## Configure
 
 Repository **Settings → Secrets and variables → Actions**:

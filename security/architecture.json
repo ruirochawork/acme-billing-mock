@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "note": "The shape of this application, declared by the application itself, so an assessment tool can draw where its findings actually sit instead of guessing from URLs or showing a stock diagram. Companion to checks.json (what may be tested) and findings.json (what can be fixed). This service is one small Express deployable: the modules below are parts of that one process, not separate services, and the map says so. Keep this honest — a component here must correspond to real code in src/, and its routes to routes that exist.",
+  "deployable": "acme-billing-mock, a single Node process (src/app.js)",
+  "components": [
+    {
+      "id": "browser",
+      "name": "Browser",
+      "type": "client",
+      "detail": "Anyone who can reach the service. There is no front-end build; the root route serves one page of HTML.",
+      "routes": []
+    },
+    {
+      "id": "site",
+      "name": "Public site",
+      "type": "module",
+      "detail": "The landing page and the service's own health and version endpoints. Unauthenticated by design.",
+      "routes": ["/", "/healthz", "/version", "/.well-known/pmc-verify"]
+    },
+    {
+      "id": "auth",
+      "name": "Session login",
+      "type": "module",
+      "detail": "Signs a user in as one of the seeded tenants and sets the session cookie everything else reads.",
+      "routes": ["/login", "/api/me"]
+    },
+    {
+      "id": "invoices",
+      "name": "Invoices API",
+      "type": "module",
+      "detail": "Lists the caller's invoices and returns one by id. The per-record ownership check is the seeded flaw.",
+      "routes": ["/api/invoices"]
+    },
+    {
+      "id": "debug",
+      "name": "Debug configuration",
+      "type": "module",
+      "detail": "Unauthenticated endpoint that lists every account and its latest invoice id. It is what turns an unguessable id into a guessable one, so it is the chain enabler for the invoice flaw.",
+      "routes": ["/debug/config"]
+    },
+    {
+      "id": "data",
+      "name": "In-memory data",
+      "type": "datastore",
+      "detail": "Two invented tenants and four invoices held in process memory (src/data.js). No database, no real data, nothing persisted.",
+      "routes": []
+    }
+  ],
+  "connections": [
+    { "from": "browser", "to": "site" },
+    { "from": "browser", "to": "auth" },
+    { "from": "browser", "to": "invoices" },
+    { "from": "browser", "to": "debug" },
+    { "from": "auth", "to": "data" },
+    { "from": "invoices", "to": "data" },
+    { "from": "debug", "to": "data" }
+  ]
+}
