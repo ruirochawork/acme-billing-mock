@@ -76,7 +76,9 @@ assuming: `security/checks.json` (the access-control checks it publishes for a t
 `security/findings.json` (how each finding is fixed), and `security/architecture.json` (its
 components and the routes each one serves, so findings are drawn where they actually sit). Each has
 to stay true of the code: a component that no longer exists, or a route that was never added, is a
-bug in the declaration.
+bug in the declaration, and [tests/declarations.test.mjs](tests/declarations.test.mjs) fails CI when
+one drifts. [docs/DECLARATIONS.md](docs/DECLARATIONS.md) explains what each file is for and what is
+checked.
 
 ## Configure
 
